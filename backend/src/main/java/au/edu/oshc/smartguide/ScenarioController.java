@@ -1,0 +1,22 @@
+package au.edu.oshc.smartguide;
+
+import org.springframework.web.bind.annotation.*;
+import java.util.*;
+
+@RestController
+@RequestMapping("/api/scenarios")
+class ScenarioController {
+ @GetMapping List<Map<String,Object>> all(){
+  return List.of(
+   x("unwell","Feeling unwell","Arrival / first illness","You feel unwell and are unsure which healthcare option fits the situation.","What should you consider first?",List.of("An appropriate non-emergency healthcare option such as a GP","Always go directly to an emergency department","Ignore the problem","Wait until it becomes severe"),0,"The learning objective is to recognise an appropriate non-emergency pathway rather than automatically going to hospital.","Use current authoritative healthcare guidance when unsure."),
+   x("gp","GP","First GP visit","You think you need medical attention but do not believe it is an emergency.","What is the key learning point?",List.of("Understand how a GP can be an appropriate first point of care","Every problem requires hospital treatment","A claim must be made before seeing a doctor","Only pharmacies can provide healthcare"),0,"The prototype teaches students to understand common healthcare pathways, including GP care.","Do not use this scenario as diagnosis or medical advice."),
+   x("pharmacy","Pharmacy","Medication / pharmacy","A healthcare professional has discussed medication and you need to understand what happens next.","What should you understand?",List.of("The role of a pharmacy and the medication process","Hospitals are the only place for medicine","Every medicine is free","Claims never matter"),0,"Understanding the pharmacy role and medication process is an important practical OSHC learning outcome.","Check current medicine and OSHC information."),
+   x("hospital","Hospital","Hospital care","You are considering whether hospital care is appropriate.","What is important to learn?",List.of("Understand when hospital care may be appropriate and check current guidance","Always choose hospital for every illness","A hospital visit automatically guarantees full cover","Never seek hospital care"),0,"The learning objective is pathway awareness, not diagnosis or a guarantee of cover.","For urgent situations, follow emergency guidance and professional advice."),
+   x("emergency","Emergency","Urgent / emergency","You believe the situation may be urgent or an emergency.","What is the learning objective?",List.of("Recognise urgency and use appropriate emergency support","Treat every illness as an emergency","Ignore the situation","Wait until a claim is submitted"),0,"The prototype helps users recognise that emergencies require immediate appropriate action.","This prototype does not replace emergency services or medical advice."),
+   x("bill","Medical bill","First medical bill","You receive a medical bill and are unsure what you may need to pay.","What is important to understand?",List.of("There may be out-of-pocket costs and a claim may be possible depending on circumstances","Every bill is paid in full","Bills never matter","A bill always means cover is invalid"),0,"The learning objective includes awareness of possible out-of-pocket costs and the claim process.","Check your current policy and provider information."),
+   x("claim","Making a claim","First claim","You paid a medical expense and want to understand whether a claim may be appropriate.","What should you learn?",List.of("The basic claim process and possible documentation","Claims are never possible","No information is required","All claims are guaranteed"),0,"The prototype teaches the practical steps and documentation that may be involved in a claim.","Use the current official insurer claim process."),
+   x("feedback","Scenario feedback","After learning","You have completed a Healthcare Moment and want to help improve the learning experience.","What is useful feedback?",List.of("What was clear, confusing, difficult or missing","Only a personal medical diagnosis","Payment-card information","Your password or MFA secret"),0,"Feedback should improve usability and learning content without collecting unnecessary sensitive information.","Never enter passwords, MFA secrets, card numbers or clinical details into feedback.")
+  );
+ }
+ Map<String,Object> x(String id,String title,String moment,String situation,String q,List<String>o,int c,String ex,String rem){return Map.of("id",id,"title",title,"moment",moment,"situation",situation,"question",q,"options",o,"correctIndex",c,"explanation",ex,"reminder",rem);}
+}
