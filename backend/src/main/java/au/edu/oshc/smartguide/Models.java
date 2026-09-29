@@ -3,6 +3,9 @@ package au.edu.oshc.smartguide;
 import jakarta.persistence.*;
 import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.Optional;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 @Entity
 @Table(name="app_users")
@@ -10,6 +13,7 @@ class User {
     @Id @GeneratedValue(strategy=GenerationType.IDENTITY) Long id;
     @Column(unique=true, nullable=false) String email;
     @Column(nullable=false) String passwordHash;
+    @Column(name="passkey_user_handle", unique=true, length=64) String passkeyUserHandle;
     String mfaSecret;
     boolean mfaEnabled;
     boolean registrationMfaPending;
@@ -34,7 +38,13 @@ class User {
     public String getRole(){return role;} public void setRole(String x){role=x;}
 }
 
-interface UserRepository extends JpaRepository<User,Long>{ Optional<User> findByEmail(String email); }
+interface UserRepository extends JpaRepository<User,Long> {
+    Optional<User> findByEmail(String email);
+    Optional<User> findByPasskeyUserHandle(String handle);
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select u from User u where u.id = :id")
+    Optional<User> lockById(@Param("id") Long id);
+}
 
 @Entity @Table(name="progress")
 class Progress {

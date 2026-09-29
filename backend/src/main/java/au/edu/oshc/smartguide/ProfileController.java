@@ -1,6 +1,8 @@
 package au.edu.oshc.smartguide;
 
 import jakarta.servlet.http.HttpSession;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.transaction.annotation.Transactional;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -12,8 +14,8 @@ import java.util.*;
 @RestController
 @RequestMapping("/api/profile")
 class ProfileController {
-    final UserRepository users; final BCryptPasswordEncoder enc; final MfaService mfa; final ProgressRepository progress; final TokenService tokenService; final AuthCookies cookies;
-    ProfileController(UserRepository u,BCryptPasswordEncoder e,MfaService m,ProgressRepository pr,TokenService ts,AuthCookies c){users=u;enc=e;mfa=m;progress=pr;tokenService=ts;cookies=c;}
+    final UserRepository users; final BCryptPasswordEncoder enc; final MfaService mfa; final ProgressRepository progress; final TokenService tokenService; final AuthCookies cookies; final PasskeyCredentialRepository passkeys; final PasswordResetTokenRepository resetTokens;
+    ProfileController(UserRepository u,BCryptPasswordEncoder e,MfaService m,ProgressRepository pr,TokenService ts,AuthCookies c,PasskeyCredentialRepository pk,PasswordResetTokenRepository rt){users=u;enc=e;mfa=m;progress=pr;tokenService=ts;cookies=c;passkeys=pk;resetTokens=rt;}
 
     User current(Authentication auth){if(auth==null||!auth.isAuthenticated())return null;try{return users.findById(Long.valueOf(auth.getName())).orElse(null);}catch(Exception e){return null;}}
     ResponseEntity<?> unauthorized(){return ResponseEntity.status(401).body(Map.of("message","Authentication required."));}
@@ -42,21 +44,25 @@ class ProfileController {
         users.save(u);return ResponseEntity.ok(view(u));
     }
 
+    @Transactional
     @PostMapping("/email") ResponseEntity<?> email(@RequestBody Map<String,String>b,Authentication auth){
         User u=current(auth);if(u==null)return unauthorized();
         if(!enc.matches(b.getOrDefault("currentPassword",""),u.getPasswordHash()))return ResponseEntity.badRequest().body(Map.of("message","Current password is incorrect."));
         String email=b.getOrDefault("newEmail","").trim().toLowerCase();
         if(!email.matches(AuthController.EMAIL_REGEX))return ResponseEntity.badRequest().body(Map.of("message","Enter a valid email address."));
         if(users.findByEmail(email).filter(x->!x.getId().equals(u.getId())).isPresent())return ResponseEntity.status(409).body(Map.of("message","That email is already registered."));
+        String previousEmail=u.getEmail();
+        progress.findByEmail(previousEmail).ifPresent(p->{p.setEmail(email);progress.save(p);});
+        resetTokens.deleteByEmail(previousEmail);
         u.setEmail(email);users.save(u);return ResponseEntity.ok(view(u));
     }
 
-    @PostMapping("/password") ResponseEntity<?> password(@RequestBody Map<String,String>b,Authentication auth,HttpServletResponse response){
+    @PostMapping("/password") ResponseEntity<?> password(@RequestBody Map<String,String>b,Authentication auth,HttpServletRequest request,HttpServletResponse response){
         User u=current(auth);if(u==null)return unauthorized();
         if(!enc.matches(b.getOrDefault("currentPassword",""),u.getPasswordHash()))return ResponseEntity.badRequest().body(Map.of("message","Current password is incorrect."));
         String np=b.getOrDefault("newPassword","");
         if(!AuthController.strongPassword(np))return ResponseEntity.badRequest().body(Map.of("message",AuthController.PASSWORD_MESSAGE));
-        u.setPasswordHash(enc.encode(np));users.save(u);tokenService.revokeAllForUser(u.getId());cookies.clearAll(response);
+        u.setPasswordHash(enc.encode(np));users.save(u);tokenService.revokeAllForUser(u.getId());cookies.clearAll(response);AuthenticationFlow.fresh(request);
         return ResponseEntity.ok(Map.of("message","Password changed successfully. Please sign in again."));
     }
 
@@ -76,25 +82,29 @@ class ProfileController {
         return ResponseEntity.ok(Map.of("message","MFA enabled successfully.","mfaEnabled",true));
     }
 
-    @PostMapping("/mfa/disable") ResponseEntity<?> disableMfa(@RequestBody Map<String,String>b,Authentication auth,HttpServletResponse response){
+    @PostMapping("/mfa/disable") ResponseEntity<?> disableMfa(@RequestBody Map<String,String>b,Authentication auth,HttpServletRequest request,HttpServletResponse response){
         User u=current(auth);if(u==null)return unauthorized();
         if(!enc.matches(b.getOrDefault("password",""),u.getPasswordHash()))return ResponseEntity.badRequest().body(Map.of("message","Password verification failed."));
-        u.setMfaEnabled(false);users.save(u);tokenService.revokeAllForUser(u.getId());cookies.clearAll(response);
+        u.setMfaEnabled(false);users.save(u);tokenService.revokeAllForUser(u.getId());cookies.clearAll(response);AuthenticationFlow.fresh(request);
         return ResponseEntity.ok(Map.of("message","MFA disabled. You must sign in again."));
     }
 
     @PostMapping("/mfa/reset") ResponseEntity<?> resetMfa(@RequestBody Map<String,String>b,Authentication auth,HttpSession session){
         User u=current(auth);if(u==null)return unauthorized();
         if(!enc.matches(b.getOrDefault("password",""),u.getPasswordHash()))return ResponseEntity.badRequest().body(Map.of("message","Password verification failed."));
-        String secret=mfa.secret();u.setMfaSecret(secret);u.setMfaEnabled(false);users.save(u);
-        session.setAttribute("PENDING",u.getEmail());session.setMaxInactiveInterval(5*60);
-        return ResponseEntity.ok(Map.of("otpauthUri",mfa.uri(u.getEmail(),secret),"message","MFA reset. Complete authenticator verification to enable it again."));
+        String secret=mfa.secret();
+        session.setAttribute("MFA_ENABLE_SECRET",secret);
+        session.setAttribute("MFA_ENABLE_USER_ID",u.getId());
+        session.setAttribute("MFA_ENABLE_STARTED_AT",System.currentTimeMillis());
+        session.setMaxInactiveInterval(5*60);
+        return ResponseEntity.ok(Map.of("otpauthUri",mfa.uri(u.getEmail(),secret),"message","Scan the new QR code, then verify it with the MFA enable verification endpoint."));
     }
 
-    @DeleteMapping ResponseEntity<?> deleteAccount(@RequestBody Map<String,String>b,Authentication auth,HttpServletResponse response){
+    @Transactional
+    @DeleteMapping ResponseEntity<?> deleteAccount(@RequestBody Map<String,String>b,Authentication auth,HttpServletRequest request,HttpServletResponse response){
         User u=current(auth);if(u==null)return unauthorized();
         if(!enc.matches(b.getOrDefault("password",""),u.getPasswordHash()))return ResponseEntity.badRequest().body(Map.of("message","Password verification failed."));
-        String email=u.getEmail();progress.findByEmail(email).ifPresent(progress::delete);tokenService.revokeAllForUser(u.getId());users.delete(u);cookies.clearAll(response);
+        String email=u.getEmail();progress.findByEmail(email).ifPresent(progress::delete);tokenService.revokeAllForUser(u.getId());passkeys.deleteByUserId(u.getId());resetTokens.deleteByEmail(email);users.delete(u);cookies.clearAll(response);AuthenticationFlow.fresh(request);
         return ResponseEntity.ok(Map.of("message","Account deleted successfully."));
     }
 

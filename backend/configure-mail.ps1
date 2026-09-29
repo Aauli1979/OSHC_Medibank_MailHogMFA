@@ -8,6 +8,7 @@ $env:MAIL_SMTP_AUTH = "true"
 $env:MAIL_SMTP_STARTTLS = "true"
 $env:MAIL_SMTP_STARTTLS_REQUIRED = "true"
 $env:MAIL_SMTP_SSL_TRUST = "smtp.gmail.com"
+$env:MAIL_FROM = $env:MAIL_USERNAME
 $env:FRONTEND_URL = "http://localhost:5173"
 Write-Host "SMTP variables configured for this PowerShell session."
 Write-Host "Edit MAIL_USERNAME and MAIL_PASSWORD before running mvn spring-boot:run."

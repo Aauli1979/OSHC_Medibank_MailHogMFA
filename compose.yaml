@@ -1,0 +1,73 @@
+# The single Compose definition for Docker Compose and rootless Podman.
+services:
+  mailhog:
+    image: docker.io/mailhog/mailhog:v1.0.1
+    ports:
+      - "${MAILHOG_BIND:-127.0.0.1}:${MAILHOG_SMTP_PORT:-1025}:1025"
+      - "${MAILHOG_BIND:-127.0.0.1}:${MAILHOG_UI_PORT:-8025}:8025"
+    networks:
+      - app
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Containerfile
+    environment:
+      SERVER_PORT: "8080"
+      FRONTEND_URL: "${FRONTEND_URL:-http://localhost:8088}"
+      WEBAUTHN_RP_ID: "${WEBAUTHN_RP_ID:-localhost}"
+      WEBAUTHN_RP_NAME: "${WEBAUTHN_RP_NAME:-OSHC SmartGuide}"
+      WEBAUTHN_ORIGINS: "${WEBAUTHN_ORIGINS:-http://localhost:8088}"
+      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      COOKIE_SAME_SITE: "${COOKIE_SAME_SITE:-Lax}"
+      ACCESS_TOKEN_MINUTES: "${ACCESS_TOKEN_MINUTES:-15}"
+      REFRESH_TOKEN_DAYS: "${REFRESH_TOKEN_DAYS:-14}"
+      JAVA_TOOL_OPTIONS: "${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=75.0}"
+      MAIL_HOST: "${MAIL_HOST:-mailhog}"
+      MAIL_PORT: "${MAIL_PORT:-1025}"
+      MAIL_FROM: "${MAIL_FROM:-oshc-smartguide@localhost}"
+      MAIL_USERNAME: "${MAIL_USERNAME:-}"
+      MAIL_PASSWORD: "${MAIL_PASSWORD:-}"
+      MAIL_SMTP_AUTH: "${MAIL_SMTP_AUTH:-false}"
+      MAIL_SMTP_STARTTLS: "${MAIL_SMTP_STARTTLS:-false}"
+      MAIL_SMTP_STARTTLS_REQUIRED: "${MAIL_SMTP_STARTTLS_REQUIRED:-false}"
+      MAIL_SMTP_SSL_TRUST: "${MAIL_SMTP_SSL_TRUST:-mailhog}"
+    depends_on:
+      - mailhog
+    volumes:
+      - oshc_data:/app/data
+    networks:
+      - app
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Containerfile
+    depends_on:
+      - backend
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8088}:8080"
+    networks:
+      - app
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  oshc_data:
+
+networks:
+  app:
+    driver: bridge

@@ -4,6 +4,9 @@ import jakarta.persistence.*;
 import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 @Entity
 @Table(name="auth_tokens", indexes={
@@ -40,4 +43,7 @@ class AuthToken {
 interface AuthTokenRepository extends JpaRepository<AuthToken,Long> {
     Optional<AuthToken> findByTokenHashAndType(String tokenHash, String type);
     List<AuthToken> findAllByUserIdAndRevokedFalse(Long userId);
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select t from AuthToken t where t.tokenHash = :hash and t.type = :type")
+    Optional<AuthToken> lockByHashAndType(@Param("hash") String hash, @Param("type") String type);
 }

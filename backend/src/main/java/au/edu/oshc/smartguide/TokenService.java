@@ -2,6 +2,7 @@ package au.edu.oshc.smartguide;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -65,7 +66,17 @@ class TokenService {
         if (raw == null || raw.isBlank()) return null;
         AuthToken token = tokens.findByTokenHashAndType(hash(raw), type).orElse(null);
         if (token == null || token.isRevoked() || token.getExpiresAt() <= System.currentTimeMillis()) return null;
-        return users.findById(token.getUserId()).orElse(null);
+        return users.findById(token.getUserId()).filter(u -> !u.isRegistrationMfaPending()).orElse(null);
+    }
+
+    @Transactional
+    User consumeRefreshToken(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        AuthToken token = tokens.lockByHashAndType(hash(raw), REFRESH).orElse(null);
+        if (token == null || token.isRevoked() || token.getExpiresAt() <= System.currentTimeMillis()) return null;
+        token.setRevoked(true);
+        tokens.saveAndFlush(token);
+        return users.findById(token.getUserId()).filter(u -> !u.isRegistrationMfaPending()).orElse(null);
     }
 
     void revoke(String raw, String type) {

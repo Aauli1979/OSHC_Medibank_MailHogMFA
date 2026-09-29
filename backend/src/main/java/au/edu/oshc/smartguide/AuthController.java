@@ -2,6 +2,7 @@ package au.edu.oshc.smartguide;
 
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.*;
@@ -22,16 +23,17 @@ class AuthController {
     final ProgressRepository progress;
     final TokenService tokenService;
     final AuthCookies cookies;
+    final AuthenticationFlow authentication;
 
     AuthController(UserRepository users, BCryptPasswordEncoder enc, MfaService mfa,
                    PasswordResetTokenRepository resetTokens, PasswordResetService resetService,
-                   ProgressRepository progress, TokenService tokenService, AuthCookies cookies) {
+                   ProgressRepository progress, TokenService tokenService, AuthCookies cookies, AuthenticationFlow authentication) {
         this.users=users; this.enc=enc; this.mfa=mfa; this.resetTokens=resetTokens;
-        this.resetService=resetService; this.progress=progress; this.tokenService=tokenService; this.cookies=cookies;
+        this.resetService=resetService; this.progress=progress; this.tokenService=tokenService; this.cookies=cookies; this.authentication=authentication;
     }
 
     @PostMapping("/register")
-    ResponseEntity<?> register(@RequestBody Map<String,String> b, HttpSession session, HttpServletResponse response) {
+    ResponseEntity<?> register(@RequestBody Map<String,String> b, HttpServletRequest request, HttpServletResponse response) {
         String email=b.getOrDefault("email","").trim().toLowerCase();
         String password=b.getOrDefault("password","");
         if(!email.matches(EMAIL_REGEX)) return ResponseEntity.badRequest().body(Map.of("message","Enter a valid email address."));
@@ -51,9 +53,7 @@ class AuthController {
         // MFA is mandatory during account creation. The account is not
         // authenticated until the student scans the QR code and verifies
         // the six-digit TOTP code.
-        session.setAttribute("REGISTER_MFA", email);
-        session.setMaxInactiveInterval(10 * 60);
-        session.removeAttribute("PENDING");
+        authentication.pending(request, response, "REGISTER_MFA", email, 10 * 60);
         return ResponseEntity.ok(Map.of(
                 "authenticated", false,
                 "mfaRequired", true,
@@ -65,15 +65,14 @@ class AuthController {
     }
 
     @PostMapping("/login")
-    ResponseEntity<?> login(@RequestBody Map<String,String> b, HttpSession session, HttpServletResponse response) {
+    ResponseEntity<?> login(@RequestBody Map<String,String> b, HttpServletRequest request, HttpServletResponse response) {
         String email=b.getOrDefault("email","").trim().toLowerCase();
         String password=b.getOrDefault("password","");
         User u=users.findByEmail(email).orElse(null);
         if(u==null || !enc.matches(password,u.getPasswordHash())) return ResponseEntity.status(401).body(Map.of("message","Invalid credentials."));
 
         if(u.isRegistrationMfaPending()) {
-            session.setAttribute("REGISTER_MFA", email);
-            session.setMaxInactiveInterval(10 * 60);
+            authentication.pending(request, response, "REGISTER_MFA", email, 10 * 60);
             return ResponseEntity.ok(Map.of(
                     "authenticated", false,
                     "mfaRequired", true,
@@ -85,18 +84,17 @@ class AuthController {
         }
 
         if(u.isMfaEnabled()) {
-            session.setAttribute("PENDING",email);
-            session.setMaxInactiveInterval(5*60);
+            authentication.pending(request, response, "PENDING", email, 5 * 60);
             return ResponseEntity.ok(Map.of("authenticated",false,"mfaRequired",true));
         }
 
-        session.removeAttribute("PENDING");
-        issueTokens(u,response);
+        authentication.signedIn(request, response, u);
         return ResponseEntity.ok(Map.of("authenticated",true,"mfaRequired",false,"email",email,"role",role(u)));
     }
 
     @PostMapping("/register/mfa/verify")
-    ResponseEntity<?> verifyRegistrationMfa(@RequestBody Map<String,String> b, HttpSession session, HttpServletResponse response) {
+    ResponseEntity<?> verifyRegistrationMfa(@RequestBody Map<String,String> b, HttpServletRequest request, HttpServletResponse response) {
+        HttpSession session=request.getSession();
         String email=(String)session.getAttribute("REGISTER_MFA");
         if(email==null) return ResponseEntity.status(401).body(Map.of("message","Your MFA registration session has expired. Please create the account again or sign in again."));
         User u=users.findByEmail(email).orElse(null);
@@ -106,8 +104,7 @@ class AuthController {
         u.setMfaEnabled(true);
         u.setRegistrationMfaPending(false);
         users.save(u);
-        session.removeAttribute("REGISTER_MFA");
-        issueTokens(u,response);
+        authentication.signedIn(request, response, u);
         return ResponseEntity.ok(Map.of(
                 "authenticated",true,
                 "mfaRequired",false,
@@ -119,25 +116,24 @@ class AuthController {
     }
 
     @PostMapping("/mfa/verify")
-    ResponseEntity<?> verify(@RequestBody Map<String,String> b, HttpSession session, HttpServletResponse response) {
+    ResponseEntity<?> verify(@RequestBody Map<String,String> b, HttpServletRequest request, HttpServletResponse response) {
+        HttpSession session=request.getSession();
         String email=(String)session.getAttribute("PENDING");
         if(email==null) return ResponseEntity.status(401).body(Map.of("message","No pending authentication. Please sign in again."));
         User u=users.findByEmail(email).orElse(null);
-        if(u==null) return ResponseEntity.status(401).body(Map.of("message","No pending authentication. Please sign in again."));
+        if(u==null || u.isRegistrationMfaPending()) return ResponseEntity.status(401).body(Map.of("message","No pending authentication. Please sign in again."));
         if(!mfa.valid(u.getMfaSecret(),b.getOrDefault("code",""))) return ResponseEntity.status(401).body(Map.of("message","Invalid authenticator code."));
 
         u.setMfaEnabled(true);
         users.save(u);
-        session.removeAttribute("PENDING");
-        issueTokens(u,response);
+        authentication.signedIn(request, response, u);
         return ResponseEntity.ok(Map.of("authenticated",true,"email",u.getEmail(),"role",role(u)));
     }
 
     @PostMapping("/refresh")
     ResponseEntity<?> refresh(HttpServletResponse response, @CookieValue(value="SG_REFRESH",required=false) String refresh) {
-        User u=tokenService.userFromRefreshToken(refresh);
+        User u=tokenService.consumeRefreshToken(refresh);
         if(u==null) { cookies.clearAll(response); return ResponseEntity.status(401).body(Map.of("message","Refresh token is invalid or expired.")); }
-        tokenService.revoke(refresh,TokenService.REFRESH);
         issueTokens(u,response);
         return ResponseEntity.ok(Map.of("authenticated",true,"email",u.getEmail(),"role",role(u)));
     }
@@ -180,21 +176,23 @@ class AuthController {
     }
 
     @PostMapping("/revoke-all")
-    ResponseEntity<?> revokeAll(org.springframework.security.core.Authentication auth, HttpServletResponse response) {
+    ResponseEntity<?> revokeAll(org.springframework.security.core.Authentication auth, HttpServletRequest request, HttpServletResponse response) {
         User u=current(auth);
         if(u==null) return ResponseEntity.status(401).body(Map.of("message","Authentication required."));
         tokenService.revokeAllForUser(u.getId());
         cookies.clearAll(response);
+        AuthenticationFlow.fresh(request);
         return ResponseEntity.ok(Map.of("message","All active sessions have been revoked."));
     }
 
     @PostMapping("/logout")
     ResponseEntity<?> logout(@CookieValue(value="SG_ACCESS",required=false) String access,
                              @CookieValue(value="SG_REFRESH",required=false) String refresh,
-                             HttpServletResponse response) {
+                             HttpServletRequest request, HttpServletResponse response) {
         tokenService.revoke(access,TokenService.ACCESS);
         tokenService.revoke(refresh,TokenService.REFRESH);
         cookies.clearAll(response);
+        AuthenticationFlow.fresh(request);
         return ResponseEntity.noContent().build();
     }
 

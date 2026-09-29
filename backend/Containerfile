@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+FROM docker.io/library/maven:3.9-eclipse-temurin-21-alpine AS build
+WORKDIR /workspace
+
+# Use the pinned resolver and release versions from pom.xml for the cache layer.
+COPY pom.xml ./
+RUN mvn -B -ntp -DskipTests dependency:go-offline
+
+COPY src ./src
+# Build only from the dependencies resolved above; no second online resolution.
+RUN mvn -B -ntp -o -DskipTests package
+
+FROM docker.io/library/eclipse-temurin:21-jre-alpine
+
+RUN addgroup -S -g 10001 app \
+    && adduser -S -D -H -u 10001 -G app app \
+    && mkdir -p /app/data \
+    && chown -R app:app /app
+
+WORKDIR /app
+COPY --from=build --chown=app:app /workspace/target/smartguide-1.0.0.jar /app/app.jar
+
+USER 10001:10001
+EXPOSE 8080
+
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
